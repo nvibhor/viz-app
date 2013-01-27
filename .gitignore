@@ -1,0 +1,4 @@
+*.swp
+.env
+venv/*
+ui-assignment

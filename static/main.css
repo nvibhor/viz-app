@@ -1,0 +1,36 @@
+body {
+  background-color:#202000;
+  margin: 0;
+  font-family:Verdana,Arial,sans-serif/*{ffDefault}*/;
+}
+h2 {
+  font-size: 14pt;
+  font-weight: bold;
+}
+#container {
+  background-color:whitesmoke;
+  margin: 0 150px;
+  min-width: 1000px;
+  min-height: 600px;
+}
+#header, #footer {
+  height: 50px;
+  background-color: #669f11;
+  color: white;
+  font-size: 24pt;
+  text-align: center;
+  padding: 10px 0;
+}
+#chart-area {
+  min-height: 500px;
+  padding: 5px 15px;
+}
+#tabular-area {
+  min-height: 500px;
+  padding: 5px 15px;
+}
+#table-container {
+  overflow: auto;
+  border: solid 1px gray;
+  max-height: 490px;
+}

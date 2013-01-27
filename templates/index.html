@@ -1,0 +1,58 @@
+<html>
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <title>Visualize population</title>
+<link rel="stylesheet" href="http://ajax.googleapis.com/ajax/libs/jqueryui/1.10.0/themes/base/jquery-ui.css" type="text/css" media="all" />
+  <link rel="stylesheet" href="/static/main.css" type="text/css" />
+  <script type="text/javascript" src="https://www.google.com/jsapi"></script>
+  <script src="//ajax.googleapis.com/ajax/libs/jquery/1.9.0/jquery.min.js"></script>
+<script src="//ajax.googleapis.com/ajax/libs/jqueryui/1.10.0/jquery-ui.min.js"></script>
+</head>
+<body>
+<div id="container">
+<div id="header">
+   Population visualization
+</div>
+<div id="tabs">
+  <ul>
+    <li><a href="#tabs-1">Data Table</a></li>
+    <li><a href="#tabs-2">Data Charts</a></li>
+  </ul>
+  <div id="tabs-1">
+    <div id="tabular-area">
+      <div id="table-container"></div>
+    </div>
+  </div>
+  <div id="tabs-2">
+    <div id="chart-area">
+    </div>
+  </div>
+</div>
+<div id="footer">
+</div>
+</div>
+</body>
+<script type="text/javascript" src="/static/main.js">
+</script>
+<script type="text/javascript">
+google.load('visualization', '1', {packages:
+    [ 'table',
+      'corechart' ]
+});
+
+$("#tabs").tabs({
+  activate: UIUtils.onTabActivate,
+});
+
+google.setOnLoadCallback(function() {
+  // TODO: Instead of serializing the load calls, start the 
+  // async loads in parallel and use a blocking bar pattern.
+  $.ajax('/worlddata').done(function(data) {
+    worldVisualizer = new WorldVisualizer(data);
+    worldVisualizer.logDataToConsole();
+    worldVisualizer.displayAsTable($('#table-container')[0]);
+  });
+});
+
+</script>
+</html>
