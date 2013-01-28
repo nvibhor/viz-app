@@ -27,7 +27,7 @@ h2 {
   float:left;
 }
 .chart-area {
-  min-height: 500px;
+  height: 600px;
   padding: 5px 15px;
   position:relative;
   left: 300px;

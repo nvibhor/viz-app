@@ -373,7 +373,7 @@ CountrySelectorView.prototype.bindCallbacks = function(selectedFn, unselectedFn)
 CountrySelectorView.prototype.select = function(countryCode) {
   var item = $('#' + countryCode);
   item.addClass('ui-selected');
-  this.selectedCallback_(null /* event */, {selected: item[0]});
+  this.selectedCallback_(null /* event */, {selected: item[0]}, true);
 };
 
 
@@ -390,6 +390,17 @@ CountrySelectorView.prototype.unselect = function(countryCode) {
 
 //================ chart-view.js =======================
 /**
+ * ChartView encapsulates 2 things:
+ *   - The chart objects that are used render the line/scatter charts and
+ *   manages any event triggered as result. This is the view portion of the
+ *   class.
+ *   - The dataTable object used to represent the data rendered by the
+ *   charts. This is the model portion of the class.
+ *
+ * Ideally, the two should be separated but both are highly cohesive when it
+ * comes to rendering and animation. Most of the logic in this class is to
+ * manage the modification on the model and call the view to re-render itself.
+ *
  * @param {Element} container1 The DOM element in which the first chart type is
  *    to be rendered in.
  * @param {Element} container2 The DOM element in which the second chart type is
@@ -425,11 +436,17 @@ function ChartView(container1, container2) {
 
   /**
    * An object with draw options needed by google chart draw functionality.
-   * All animation specifications are specified as part of this option.
    *
    * @type {Object}
    */
   this.drawOptions_;
+
+  /**
+   * All animation specifications are specified as part of this option.
+   *
+   * @type {Object}
+  */
+  this.animationOptions_;
 
   this.initialized_ = false;
 
@@ -445,6 +462,7 @@ function ChartView(container1, container2) {
   // not ready. It is set to false, otherwise.
   this.isDrawing_ = false;
 }
+
 
 // Enum
 ChartView.LINE_CHART = 0;
@@ -474,12 +492,18 @@ ChartView.prototype.initialize = function(years) {
     this.dataTable_.addRow([years[i]]);
   }
 
+  this.animationOptions_ = {
+    duration: 500,
+    easing: 'linear',
+  };
+
   this.drawOptions_ = {   // some animation stuff.
-    animation: {
-      duration: 1500,
-      easing: 'inAndOut',
-    },
     hAxis: {format: '####'},
+    chartArea: {
+      left: 150,
+      top: 50,
+      height: 400,
+    }
   };
 
   // Add 'ready' listener for which each chart object. We want to to be
@@ -493,6 +517,18 @@ ChartView.prototype.initialize = function(years) {
   // A map from country code to data table column number which contains the
   // data for corresponding country line.
   this.countryCodeToColNum_ = { };
+};
+
+
+ChartView.prototype.enableAnimation = function() {
+  this.drawOptions_.animation = this.animationOptions_;
+};
+
+
+ChartView.prototype.disableAnimation = function() {
+  if (!!this.drawOptions_.animation) {
+    delete this.drawOptions_.animation;
+  }
 };
 
 
@@ -527,11 +563,23 @@ ChartView.prototype.setCurrentChart = function(chartType) {
  *
  * @private
  */
-ChartView.prototype.addCountryLine_ = function(countryData) {
+ChartView.prototype.addCountryLine_ = function(countryData, noIncremental) {
   var colNum = this.dataTable_.addColumn('number', countryData.countryName);
-  for (var i = 0; i < countryData.yearlyRows.length; ++i) {
-    var yearlyRow = countryData.yearlyRows[i];
-    this.dataTable_.setCell(i, colNum, yearlyRow.v, yearlyRow.f);
+  var yearlyRows = countryData.yearlyRows;
+  if (yearlyRows.length <= 0) return;
+
+  var me = this;
+  var rowNum = 0;
+
+  yearlyRows.forEach(function(yearlyRow) {
+    me.dataTable_.setCell(rowNum++, colNum, yearlyRow.v, yearlyRow.f);
+    if (!noIncremental) {
+      me.redraw();
+    }
+  });
+
+  if (noIncremental) {
+    me.redraw();
   }
 
   return colNum;
@@ -543,7 +591,7 @@ ChartView.prototype.addCountryLine_ = function(countryData) {
  * @param {WorldDataModel} worldDataModel The model containing the ground truth
  *  of the data.
  */
-ChartView.prototype.addCountryLine = function(countryCode, worldDataModel) {
+ChartView.prototype.addCountryLine = function(countryCode, worldDataModel, noIncremental) {
   var countryName = worldDataModel.countryCodeToName(countryCode);
   var countryIndex = worldDataModel.countryCodeToIndex(countryCode);
   if (!countryName || countryIndex == undefined) return;
@@ -557,7 +605,7 @@ ChartView.prototype.addCountryLine = function(countryCode, worldDataModel) {
 
   log(countryData);
 
-  this.countryCodeToColNum_[countryCode] = this.addCountryLine_(countryData);
+  this.countryCodeToColNum_[countryCode] = this.addCountryLine_(countryData, noIncremental);
 
   // If the last call to removeCountryLine was to the only one remaining
   // country line, we save it then, add the new country line first and then
@@ -588,6 +636,7 @@ ChartView.prototype.removeCountryLine = function(countryCode) {
 
   this.dataTable_.removeColumn(colNum);
   delete this.countryCodeToColNum_[countryCode];
+  this.redraw();
 
   // If a column has been removed, it will affect the column numbers added
   // after it. So updated the stored index in our map.
@@ -615,36 +664,8 @@ ChartView.prototype.redraw = function() {
   if (!this.currentChart_) {
     throw new Exception("No chart type is selected!");
   }
+
   this.currentChart_.draw(this.dataTable_, this.drawOptions_);
-};
-
-
-ChartView.prototype.addCountryLineAndRedraw = function(
-    countryCode, worldDataModel) {
-  if (this.isDrawing_) {
-    var me = this;
-    window.setTimeout(function() {
-      me.addCountryLineAndRedraw(countryCode, worldDataModel);
-    }, 2000);
-    return;
-  }
-  this.setIsDrawing(true);
-  this.addCountryLine(countryCode, worldDataModel);
-  this.redraw();
-};
-
-
-ChartView.prototype.removeCountryLineAndRedraw = function(countryCode) {
-  if (this.isDrawing_) {
-    var me = this;
-    window.setTimeout(function() {
-      me.removeCountryLineAndRedraw(countryCode);
-    }, 2000);
-    return;
-  }
-  this.setIsDrawing(true);
-  this.removeCountryLine(countryCode);
-  this.redraw();
 };
 
 
@@ -746,9 +767,13 @@ VizController.prototype.showDefaultChartView = function() {
 
   this.chartSelectorView_.select(ChartView.LINE_CHART);
 
+  this.chartView_.disableAnimation();
+
   this.countrySelectorView_.select('USA');
   this.countrySelectorView_.select('GBR');
   this.countrySelectorView_.select('DEU');
+
+  this.chartView_.enableAnimation();
 };
 
 
@@ -777,12 +802,12 @@ VizController.prototype.onChartSelect_ = function(event) {
  *
  * @private
  */
-VizController.prototype.onCountrySelect_ = function(event, ui) {
+VizController.prototype.onCountrySelect_ = function(event, ui, opt_noIncremental) {
   if (!ui || !ui.selected || !ui.selected.id) return;
   log('onselect ' + ui.selected.id);
   if (this.chartView_.countryLineExists(ui.selected.id)) return;
 
-  this.chartView_.addCountryLineAndRedraw(ui.selected.id, this.worldDataModel_);
+  this.chartView_.addCountryLine(ui.selected.id, this.worldDataModel_, !!opt_noIncremental);
 };
 
 
@@ -801,7 +826,7 @@ VizController.prototype.onCountryUnSelect_ = function(event, ui) {
   log('onunselect ' + ui.unselected.id);
   if (!this.chartView_.countryLineExists(ui.unselected.id)) return;
 
-  this.chartView_.removeCountryLineAndRedraw(ui.unselected.id, this.worldDataModel_);
+  this.chartView_.removeCountryLine(ui.unselected.id, this.worldDataModel_);
 };
 
 
