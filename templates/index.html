@@ -24,7 +24,21 @@
     </div>
   </div>
   <div id="tabs-2">
-    <div id="chart-area">
+    <div id="selection-panel">
+      <div id="chart-type-selector-div">
+        Display data as:&nbsp;
+        <select id="chart-type-selector">
+        </select>
+      </div>
+      <div id="country-selector-div">
+        Choose country(s) to plot:
+        <div id="country-selector">
+        </div>
+      </div>
+    </div>
+    <div id="line-chart-area" class="chart-area">
+    </div>
+    <div id="scatter-chart-area" class="chart-area">
     </div>
   </div>
 </div>
@@ -47,10 +61,12 @@ $("#tabs").tabs({
 google.setOnLoadCallback(function() {
   // TODO: Instead of serializing the load calls, start the 
   // async loads in parallel and use a blocking bar pattern.
+  //
+  // TODO: Use a jsonp syntax in case the data needs to be served cross-domain.
   $.ajax('/worlddata').done(function(data) {
-    worldVisualizer = new WorldVisualizer(data);
-    worldVisualizer.logDataToConsole();
-    worldVisualizer.displayAsTable($('#table-container')[0]);
+    var controller = VizController.getOrCreateInstance(data);
+    // Cause a reflow to occour on the main page.
+    controller.showTableView();
   });
 });
 
