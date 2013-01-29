@@ -69,3 +69,9 @@ h2 {
   background-color:#111;
   color:white;
 }
+.lasso {
+  position: absolute;
+  z-index: 256;
+  border: 1px solid lightskyblue;
+  background-color: lightskyblue;
+}

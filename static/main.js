@@ -405,13 +405,20 @@ CountrySelectorView.prototype.unselect = function(countryCode) {
  *    to be rendered in.
  * @param {Element} container2 The DOM element in which the second chart type is
  *    to be rendered in.
+ * @param {WorldDataModel} worldDataModel Used to access following things:
+ *    - The list of years that are added as the values of x-axis in the line
+ *      chart data table.
+ *    - Country specific population data.
+ *
  * @constructor
  */
-function ChartView(container1, container2) {
+function ChartView(container1, container2, worldDataModel) {
   // Maintains a map of ChartView.*CHART -> dom container
   this.containers_ = {};
   this.containers_[ChartView.LINE_CHART] = container1;
   this.containers_[ChartView.SCATTER_CHART] = container2;
+
+  this.worldDataModel_ = worldDataModel;
 
   // Maintains a map of ChartView.*CHART -> google chart objects.
   this.charts_ = { };
@@ -457,10 +464,6 @@ function ChartView(container1, container2) {
   // Note that we will always remove the leftOverLine_ atomically with a new
   // country line. This atomicity is guaranteed by the country selector view.
   this.leftOverLine_ = '';
-
-  // Set to true if the chart is drawing using a transition and the chart is
-  // not ready. It is set to false, otherwise.
-  this.isDrawing_ = false;
 }
 
 
@@ -473,23 +476,33 @@ ChartView.SCATTER_CHART = 1;
  * Initializes the view by creating instances of each chart that this view
  * manages. Also initialized the underlying data table to initialize with years
  * column (x-axis).
- *
- * @param {Array.<number>} years The list of years that are added as the values
- *    of x-axis in the line chart data table.
  */
-ChartView.prototype.initialize = function(years) {
+ChartView.prototype.initialize = function() {
   if (this.initialized_) return;
 
   this.charts_[ChartView.LINE_CHART] =
     new google.visualization.LineChart(this.containers_[ChartView.LINE_CHART][0]);
 
-  this.charts_[ChartView.SCATTER_CHART] =
+  var scatterChart = this.charts_[ChartView.SCATTER_CHART] =
     new google.visualization.ScatterChart(this.containers_[ChartView.SCATTER_CHART][0]);
 
+  google.visualization.events.addListener(
+      scatterChart, 'animationfinish', $.proxy(this.createSpatialIndex_, this));
+
+  var scatter = this.containers_[ChartView.SCATTER_CHART];
+  scatter.drag("start", $.proxy(this.onDragStart_, this));
+  scatter.drag($.proxy(this.onDrag_, this));
+  scatter.drag("end", $.proxy(this.onDragEnd_, this));
+
+  var years = this.worldDataModel_.years();
   this.dataTable_ = new google.visualization.DataTable();
   this.dataTable_.addColumn('number', 'Year');
+  var min = Number.MAX_VALUE;
+  var max = Number.MIN_VALUE;
   for (var i = 0; i < years.length; ++i) {
     this.dataTable_.addRow([years[i]]);
+    min = Math.min(min, years[i]);
+    max = Math.max(max, years[i]);
   }
 
   this.animationOptions_ = {
@@ -497,22 +510,19 @@ ChartView.prototype.initialize = function(years) {
     easing: 'linear',
   };
 
+  
   this.drawOptions_ = {   // some animation stuff.
-    hAxis: {format: '####'},
+    hAxis: {
+      format: '####',
+      viewWindowMode: 'explicit',
+      viewWindow: { min: min, max: max },
+    },
     chartArea: {
       left: 150,
       top: 50,
       height: 400,
     }
   };
-
-  // Add 'ready' listener for which each chart object. We want to to be
-  // notified when the chart is ready after an animation and set
-  // this.isDrawing_ appropriately.
-  for (c in this.charts_) {
-    google.visualization.events.addListener(
-        this.charts_[c], 'ready', $.proxy(this.setIsDrawing, this, false));
-  }
 
   // A map from country code to data table column number which contains the
   // data for corresponding country line.
@@ -552,6 +562,10 @@ ChartView.prototype.setCurrentChart = function(chartType) {
   // Redraw the chart in case user made some changes to data model in the
   // previous chart type.
   this.redraw();
+
+  if (this.currentChartType_ == ChartView.SCATTER_CHART) {
+    this.createSpatialIndex_();
+  }
 };
 
 
@@ -564,7 +578,8 @@ ChartView.prototype.setCurrentChart = function(chartType) {
  * @private
  */
 ChartView.prototype.addCountryLine_ = function(countryData, noIncremental) {
-  var colNum = this.dataTable_.addColumn('number', countryData.countryName);
+  var colNum = this.dataTable_.addColumn(
+      'number', countryData.countryName, countryData.countryCode);
   var yearlyRows = countryData.yearlyRows;
   if (yearlyRows.length <= 0) return;
 
@@ -596,14 +611,11 @@ ChartView.prototype.addCountryLine = function(countryCode, worldDataModel, noInc
   var countryIndex = worldDataModel.countryCodeToIndex(countryCode);
   if (!countryName || countryIndex == undefined) return;
 
-  log('adding line for ' + countryName + ' available in model at ' + countryIndex);
-
   var countryData = {
+    countryCode: countryCode,
     countryName: countryName,
     yearlyRows: worldDataModel.getRowDataAsArray(countryIndex).slice(1),
   };
-
-  log(countryData);
 
   this.countryCodeToColNum_[countryCode] = this.addCountryLine_(countryData, noIncremental);
 
@@ -614,6 +626,82 @@ ChartView.prototype.addCountryLine = function(countryCode, worldDataModel, noInc
     this.removeCountryLine(this.leftOverLine_);
     this.leftOverLine_ = '';
   }
+};
+
+
+ChartView.prototype.getYRange_ = function() {
+  var textNodes = this.containers_[this.currentChartType_].find(
+      'svg g text[text-anchor="end"]');
+  if (!textNodes || !textNodes.length) return null;
+
+  var minY = Number.MAX_VALUE; var maxY = Number.MIN_VALUE;
+  var range = {};
+  for (var i = 0; i < textNodes.length; ++i) {
+    var t = $(textNodes[i]);
+    var x = t.attr('x');
+    var y = t.attr('y');
+
+    minY = Math.min(y, minY);
+    maxY = Math.max(y, maxY);
+
+    if (y == minY) {
+      range.max = parseInt(t.text().replace(/,/g, ''));
+    }
+    if (y == maxY) {
+      range.min = parseInt(t.text().replace(/,/g, ''));
+    }
+  }
+
+  return range;
+};
+
+
+ChartView.prototype.createSpatialIndex_ = function() {
+  if (!!this.spatialIndex_) delete this.spatialIndex_;
+
+  var numColumns = this.dataTable_.getNumberOfColumns();
+  var numRows = this.dataTable_.getNumberOfRows();
+
+  // We need atleast one point i.e. one row of data and one series column
+  // (which is the column after x-axis).
+  if (numRows < 1 || numColumns < 2) return;
+
+  var minX = this.drawOptions_.hAxis.viewWindow.min;
+  var maxX = this.drawOptions_.hAxis.viewWindow.max;
+  var minMaxY = this.getYRange_();
+  var quadTree = this.spatialIndex_ = new QuadTree(new Point(minX, minMaxY.min),
+                                                   new Point(maxX, minMaxY.max));;
+
+  for (var i = 0; i < numRows; ++i) {
+    for (var j = 1; j < numColumns; ++j) {
+      quadTree.insert(this.dataTable_.getValue(i, 0),
+                      this.dataTable_.getValue(i, j),
+                      this.dataTable_.getColumnId(j));
+    }
+  }
+
+  // NOTE: A repeated spatial query (same query rectange) can be made faster by
+  //       making following additions to indexing and querying:
+  //
+  // At indexing time:
+  // - Convert a nodexy -> hilbert number. This ensures that all descendants of
+  //   a given node are in range leftmost_des(node), rightmost_des(node).
+  // - Make a hashmap of {hilbert number(leaf_node)} -> its data points.
+  // 
+  // At querying time:
+  // - For the query rectange, decompose it into set of largest quadtree node
+  //   fully contained by the rect. If a leaf node is not fully contained by it
+  //   but has a non-zero intersection, include it. This is only needed for the first query.
+  //
+  // - For each node in the decomposed-rect set, query the hashmap above. If
+  //   the node being queried is not a leaf node, use the range search using the
+  //   above range. 
+  //
+  // We can not do bit manipulations on 64-bit numbers in javascript. The
+  // performance is known to be 6-times faster. Savings come from looking up
+  // the values directly instead of traversing the tree again.
+  // Simulating the prefix search using string is likely going to be same or
+  // worse.
 };
 
 
@@ -634,6 +722,7 @@ ChartView.prototype.removeCountryLine = function(countryCode) {
     return;
   }
 
+  // Update Quad tree by removing {year[0..n], yearlyValue[0..n], countryCode}
   this.dataTable_.removeColumn(colNum);
   delete this.countryCodeToColNum_[countryCode];
   this.redraw();
@@ -669,11 +758,61 @@ ChartView.prototype.redraw = function() {
 };
 
 
-/**
- * @param {boolean} isDrawing The new value for this.isDrawing_.
- */
-ChartView.prototype.setIsDrawing = function(isDrawing) {
-  this.isDrawing_ = isDrawing;
+ChartView.prototype.onDragStart_ = function(event, dragCallback) {
+  // TODO: delete the deletion:
+  $('.lasso').remove();
+
+  return $('<div class="lasso" />')
+    .css('opacity', .65 )
+    .appendTo( document.body );
+};
+
+ChartView.prototype.onDrag_ = function(event, dragCallback) {
+  $(dragCallback.proxy).css({
+    top: Math.min( event.pageY, dragCallback.startY ),
+    left: Math.min( event.pageX, dragCallback.startX ),
+    height: Math.abs( event.pageY - dragCallback.startY ),
+    width: Math.abs( event.pageX - dragCallback.startX )
+  });
+};
+
+
+function getTransformedX(origX, minX, maxX, containerPosition, chartAreaOffset) {
+  return minX + (maxX - minX)*(origX - containerPosition.left - chartAreaOffset.left)/chartAreaOffset.width;
+}
+
+function getTransformedY(origY, minY, maxY, containerPosition, chartAreaOffset) {
+  return maxY - (maxY - minY)*(origY - containerPosition.top - chartAreaOffset.top)/chartAreaOffset.height;
+}
+
+ChartView.prototype.onDragEnd_ = function(event, dragCallback) {
+  var containerPosition = this.containers_[ChartView.SCATTER_CHART].find('svg').offset();
+  var chartAreaOffset = this.currentChart_.getChartLayoutInterface().getChartAreaBoundingBox();
+
+  var minX = this.drawOptions_.hAxis.viewWindow.min;
+  var maxX = this.drawOptions_.hAxis.viewWindow.max;
+
+  var minMaxY = this.getYRange_();
+  var startX = getTransformedX(dragCallback.startX, minX, maxX, containerPosition, chartAreaOffset);
+  var startY = getTransformedY(dragCallback.startY, minMaxY.min, minMaxY.max, containerPosition, chartAreaOffset);
+  var endX = getTransformedX(event.pageX, minX, maxX, containerPosition, chartAreaOffset);
+  var endY = getTransformedY(event.pageY, minMaxY.min, minMaxY.max, containerPosition, chartAreaOffset);
+  $(dragCallback.proxy).remove();
+
+  var precisionX = 10 * (maxX - minX) / chartAreaOffset.width;
+  var precisionY = 10 * (minMaxY.max - minMaxY.min) / chartAreaOffset.height;
+
+  var selectedPoints = this.spatialIndex_.query(
+      new Rect(new Point(startX, startY), new Point(endX, endY)));
+  var yearlySliced = {};
+  selectedPoints.forEach(function(selectedPoint) {
+    if (!yearlySliced[selectedPoint.x]) {
+      yearlySliced[selectedPoint.x] = {};
+    }
+    yearlySliced[selectedPoint.x][selectedPoint.data] = selectedPoint.y;
+  });
+
+  log(yearlySliced);
 };
 
 
@@ -728,7 +867,8 @@ function VizController(data) {
   this.countrySelectorView_ = new CountrySelectorView($('#country-selector'));
   
   this.chartView_ = new ChartView($('#line-chart-area'),
-                                  $('#scatter-chart-area'));
+                                  $('#scatter-chart-area'),
+                                  this.worldDataModel_);
   
   this.tableView_ = new TableView($('#table-container')[0], this.worldDataModel_);
 }
@@ -763,7 +903,7 @@ VizController.prototype.showDefaultChartView = function() {
   this.countrySelectorView_.initialize(this.worldDataModel_.countryCodeToNameMap());
   this.countrySelectorView_.bindCallbacks($.proxy(this.onCountrySelect_, this),
                                           $.proxy(this.onCountryUnSelect_, this));
-  this.chartView_.initialize(this.worldDataModel_.years());
+  this.chartView_.initialize();
 
   this.chartSelectorView_.select(ChartView.LINE_CHART);
 
@@ -786,7 +926,6 @@ VizController.prototype.showDefaultChartView = function() {
  */
 VizController.prototype.onChartSelect_ = function(event) {
   var value = $('#chart-type-selector').val();
-  log('onselect ' + value);
 
   this.chartView_.setCurrentChart(parseInt(value));
 };
@@ -804,7 +943,6 @@ VizController.prototype.onChartSelect_ = function(event) {
  */
 VizController.prototype.onCountrySelect_ = function(event, ui, opt_noIncremental) {
   if (!ui || !ui.selected || !ui.selected.id) return;
-  log('onselect ' + ui.selected.id);
   if (this.chartView_.countryLineExists(ui.selected.id)) return;
 
   this.chartView_.addCountryLine(ui.selected.id, this.worldDataModel_, !!opt_noIncremental);
@@ -823,7 +961,6 @@ VizController.prototype.onCountrySelect_ = function(event, ui, opt_noIncremental
  */
 VizController.prototype.onCountryUnSelect_ = function(event, ui) {
   if (!ui || !ui.unselected || !ui.unselected.id) return;
-  log('onunselect ' + ui.unselected.id);
   if (!this.chartView_.countryLineExists(ui.unselected.id)) return;
 
   this.chartView_.removeCountryLine(ui.unselected.id, this.worldDataModel_);
